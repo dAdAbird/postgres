@@ -141,6 +141,17 @@ int			max_slot_wal_keep_size_mb = -1;
 int			wal_decode_buffer_size = 512 * 1024;
 bool		track_wal_io_timing = false;
 
+
+xlog_insert_rec xlog_insert_rec_fn = memcpy;
+
+static XLogInsertRec xlog_rec_s = {
+	.start = NULL,
+	.insert = memcpy,
+};
+
+XLogInsertRec *xlog_rec_smgr = &xlog_rec_s;
+
+
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
 #endif
@@ -1243,6 +1254,9 @@ CopyXLogRecordToWAL(int write_len, bool isLogSwitch, XLogRecData *rdata,
 	 */
 	Assert(freespace >= sizeof(uint32));
 
+	if (xlog_rec_smgr->start != NULL)
+		xlog_rec_smgr->start((XLogRecord*)rdata->data);
+
 	/* Copy record data */
 	written = 0;
 	while (rdata != NULL)
@@ -1256,7 +1270,7 @@ CopyXLogRecordToWAL(int write_len, bool isLogSwitch, XLogRecData *rdata,
 			 * Write what fits on this page, and continue on the next page.
 			 */
 			Assert(CurrPos % XLOG_BLCKSZ >= SizeOfXLogShortPHD || freespace == 0);
-			memcpy(currpos, rdata_data, freespace);
+			xlog_rec_smgr->insert(currpos, rdata_data, freespace);
 			rdata_data += freespace;
 			rdata_len -= freespace;
 			written += freespace;
@@ -1291,7 +1305,7 @@ CopyXLogRecordToWAL(int write_len, bool isLogSwitch, XLogRecData *rdata,
 		}
 
 		Assert(CurrPos % XLOG_BLCKSZ >= SizeOfXLogShortPHD || rdata_len == 0);
-		memcpy(currpos, rdata_data, rdata_len);
+		xlog_rec_smgr->insert(currpos, rdata_data, rdata_len);
 		currpos += rdata_len;
 		CurrPos += rdata_len;
 		freespace -= rdata_len;

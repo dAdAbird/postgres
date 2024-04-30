@@ -21,4 +21,15 @@ static const XLogSmgr xlog_smgr_standard = {
 extern XLogSmgr *xlog_smgr;
 extern void SetXLogSmgr(XLogSmgr *xlsmgr);
 
+typedef void* (*xlog_insert_rec) (void* dest, const void* src, size_t count);
+extern xlog_insert_rec xlog_insert_rec_fn;
+
+
+typedef struct XLogInsertRec {
+	void (*start) (XLogRecord *record);
+	void* (*insert) (void* dest, const void* src, size_t count);
+} XLogInsertRec;
+
+extern XLogInsertRec *xlog_rec_smgr;
+
 #endif							/* XLOG_SMGR_H */
