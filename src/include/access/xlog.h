@@ -58,6 +58,8 @@ extern PGDLLIMPORT int wal_decode_buffer_size;
 
 extern PGDLLIMPORT int CheckPointSegments;
 
+extern PGDLLIMPORT bool wal_need_seg_switch;
+
 typedef void (*checkpoint_create_hook_type)(const CheckPoint *);
 extern PGDLLIMPORT checkpoint_create_hook_type checkpoint_create_hook;
 

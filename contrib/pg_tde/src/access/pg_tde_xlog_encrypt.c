@@ -31,7 +31,7 @@
 #include "pg_tde_fe.h"
 #endif
 
-static XLogPageHeaderData DecryptCurrentPageHrd;
+static XLogLongPageHeaderData DecryptCurrentPageHrd;
 
 static void SetXLogPageIVPrefix(TimeLineID tli, XLogRecPtr lsn, char *iv_prefix);
 
@@ -39,9 +39,9 @@ static void SetXLogPageIVPrefix(TimeLineID tli, XLogRecPtr lsn, char *iv_prefix)
 /* GUC */
 static bool EncryptXLog = false;
 
-static XLogPageHeaderData EncryptCurrentPageHrd;
-
-static ssize_t TDEXLogWriteEncryptedPages(int fd, const void *buf, size_t count, off_t offset);
+static ssize_t TDEXLogWriteEncryptedPages(int fd, const void *buf, size_t count,
+											off_t offset, TimeLineID tli,
+											XLogSegNo segno);
 static char *TDEXLogEncryptBuf = NULL;
 static int XLOGChooseNumBuffers(void);
 
@@ -117,87 +117,38 @@ TDEXLogShmemInit(void)
  * Encrypt XLog page(s) from the buf and write to the segment file.
  */
 static ssize_t
-TDEXLogWriteEncryptedPages(int fd, const void *buf, size_t count, off_t offset)
+TDEXLogWriteEncryptedPages(int fd, const void *buf, size_t count, off_t offset, 
+							TimeLineID tli, XLogSegNo segno)
 {
 	char iv_prefix[16] = {0,};
-	size_t data_size = 0;
-	XLogPageHeader curr_page_hdr = &EncryptCurrentPageHrd;
-	XLogPageHeader enc_buf_page = NULL;
+	XLogLongPageHeader dec_page_hdr = &DecryptCurrentPageHrd;
 	RelKeyData *key = GetTdeGlobaleRelationKey(GLOBAL_SPACE_RLOCATOR(XLOG_TDE_OID));
-	off_t enc_off;
-	size_t page_size = XLOG_BLCKSZ - offset % XLOG_BLCKSZ;
-	uint32 iv_ctr = 0;
+	off_t enc_off = 0;
 
 #ifdef TDE_XLOG_DEBUG
-	elog(DEBUG1, "write encrypted WAL, pages amount: %d, size: %lu offset: %ld", count / (Size) XLOG_BLCKSZ, count, offset);
+	elog(DEBUG1, "write encrypted WAL, pages amount: %ld, size: %lu, offset: %ld [%lX], seg: %X/%X", 
+					count / (Size) XLOG_BLCKSZ, count, offset, offset, LSN_FORMAT_ARGS(segno));
 #endif
 
-	/*
-	 * Go through the buf page-by-page and encrypt them. We may start or
-	 * finish writing from/in the middle of the page (walsender or
-	 * `full_page_writes = off`). So preserve a page header for the IV init
-	 * data.
-	 *
-	 * TODO: check if walsender restarts form the beggining of the page in
-	 * case of the crash.
-	 */
-	for (enc_off = 0; enc_off < count;)
+	/* segment's start, should mark it as encrypted  */
+	if (offset == 0)
 	{
-		data_size = Min(page_size, count);
-
-		if (page_size == XLOG_BLCKSZ)
-		{
-			memcpy((char *) curr_page_hdr, (char *) buf + enc_off, SizeOfXLogShortPHD);
-
-			/*
-			 * Need to use a separate buf for the encryption so the page
-			 * remains non-crypted in the XLog buf (XLogInsert has to have
-			 * access to records' lsn).
-			 */
-			enc_buf_page = (XLogPageHeader) (TDEXLogEncryptBuf + enc_off);
-			memcpy((char *) enc_buf_page, (char *) buf + enc_off, (Size) XLogPageHeaderSize(curr_page_hdr));
-			enc_buf_page->xlp_info |= XLP_ENCRYPTED;
-
-			enc_off += XLogPageHeaderSize(curr_page_hdr);
-			data_size -= XLogPageHeaderSize(curr_page_hdr);
-			/* it's a beginning of the page */
-			iv_ctr = 0;
-		}
-		else
-		{
-			/* we're in the middle of the page */
-			iv_ctr = (offset % XLOG_BLCKSZ) - XLogPageHeaderSize(curr_page_hdr);
-		}
-
-		if (data_size + enc_off > count)
-		{
-			data_size = count - enc_off;
-		}
-
-		/*
-		 * The page is zeroed (no data), no sense to encrypt. This may happen
-		 * when base_backup or other requests XLOG SWITCH and some pages in
-		 * XLog buffer still not used.
+		memcpy(TDEXLogEncryptBuf, (char *) buf, SizeOfXLogLongPHD);
+		((XLogLongPageHeader) (TDEXLogEncryptBuf))->std.xlp_info |= XLP_ENCRYPTED;
+		
+		/* leave a hint to the walsender's reader in case it'll read the segment
+		 * start driectly from buffer (e.g. not via tdeheap_xlog_seg_read)
 		 */
-		if (curr_page_hdr->xlp_magic == 0)
-		{
-			/* ensure all the page is {0} */
-			Assert((*((char *) buf + enc_off) == 0) &&
-				   memcmp((char *) buf + enc_off, (char *) buf + enc_off + 1, data_size - 1) == 0);
+		memcpy((char *) dec_page_hdr, TDEXLogEncryptBuf, SizeOfXLogLongPHD);
 
-			enc_buf_page = (XLogPageHeader) (TDEXLogEncryptBuf + enc_off);
-			memcpy((char *) enc_buf_page, (char *) buf + enc_off, data_size);
-		}
-		else
-		{
-			SetXLogPageIVPrefix(curr_page_hdr->xlp_tli, curr_page_hdr->xlp_pageaddr, iv_prefix);
-			PG_TDE_ENCRYPT_DATA(iv_prefix, iv_ctr, (char *) buf + enc_off, data_size,
-								TDEXLogEncryptBuf + enc_off, key);
-		}
-
-		page_size = XLOG_BLCKSZ;
-		enc_off += data_size;
+		enc_off = SizeOfXLogLongPHD;
+		count -= SizeOfXLogLongPHD;
 	}
+
+	SetXLogPageIVPrefix(tli, segno, iv_prefix);
+	PG_TDE_ENCRYPT_DATA(iv_prefix, offset + enc_off,
+						(char *) buf + enc_off, count,
+						TDEXLogEncryptBuf + enc_off, key);
 
 	return pg_pwrite(fd, TDEXLogEncryptBuf, count, offset);
 }
@@ -210,11 +161,12 @@ TDEXLogSmgrInit(void)
 }
 
 ssize_t
-tdeheap_xlog_seg_write(int fd, const void *buf, size_t count, off_t offset)
+tdeheap_xlog_seg_write(int fd, const void *buf, size_t count, off_t offset,
+						TimeLineID tli, XLogSegNo segno)
 {
 #ifndef FRONTEND
 	if (EncryptXLog)
-		return TDEXLogWriteEncryptedPages(fd, buf, count, offset);
+		return TDEXLogWriteEncryptedPages(fd, buf, count, offset, tli, segno);
 	else
 #endif
 		return pg_pwrite(fd, buf, count, offset);
@@ -224,77 +176,47 @@ tdeheap_xlog_seg_write(int fd, const void *buf, size_t count, off_t offset)
  * Read the XLog pages from the segment file and dectypt if need.
  */
 ssize_t
-tdeheap_xlog_seg_read(int fd, void *buf, size_t count, off_t offset)
+tdeheap_xlog_seg_read(int fd, void *buf, size_t count, off_t offset, 
+						TimeLineID tli, XLogSegNo segno)
 {
 	ssize_t readsz;
 	char iv_prefix[16] = {0,};
-	size_t data_size = 0;
-	XLogPageHeader curr_page_hdr = &DecryptCurrentPageHrd;
+	XLogLongPageHeader curr_page_hdr = &DecryptCurrentPageHrd;
 	RelKeyData *key = GetTdeGlobaleRelationKey(GLOBAL_SPACE_RLOCATOR(XLOG_TDE_OID));
-	size_t page_size = XLOG_BLCKSZ - offset % XLOG_BLCKSZ;
-	off_t dec_off;
-	uint32 iv_ctr = 0;
+	off_t dec_off = 0;
 
 #ifdef TDE_XLOG_DEBUG
-	elog(DEBUG1, "read from a WAL segment, pages amount: %d, size: %lu offset: %ld", count / (Size) XLOG_BLCKSZ, count, offset);
+	elog(DEBUG1, "read from a WAL segment, pages amount: %ld, size: %lu offset: %ld [%lX], seg: %X/%X", 
+					count / (Size) XLOG_BLCKSZ, count, offset, offset, LSN_FORMAT_ARGS(segno));
 #endif
 
 	readsz = pg_pread(fd, buf, count, offset);
 
-	/*
-	 * Read the buf page by page and decypt ecnrypted pages. We may start or
-	 * fihish reading from/in the middle of the page (walreceiver) in such a
-	 * case we should preserve the last read page header for the IV data and
-	 * the encryption state.
-	 *
-	 * TODO: check if walsender/receiver restarts form the beggining of the
-	 * page in case of the crash.
-	 */
-	for (dec_off = 0; dec_off < readsz;)
+	if (offset == 0)
 	{
-		data_size = Min(page_size, readsz);
+		memcpy((char *) curr_page_hdr, (char *) buf, SizeOfXLogLongPHD);
 
-		if (page_size == XLOG_BLCKSZ)
-		{
-			memcpy((char *) curr_page_hdr, (char *) buf + dec_off, SizeOfXLogShortPHD);
+		/* set the flag to "not encrypted" for the walreceiver */
+		((XLogPageHeader) ((char *) buf))->xlp_info &= ~XLP_ENCRYPTED;
+		
+		dec_off = SizeOfXLogLongPHD;
+		count -= SizeOfXLogLongPHD;
+	}
 
-			/* set the flag to "not encrypted" for the walreceiver */
-			((XLogPageHeader) ((char *) buf + dec_off))->xlp_info &= ~XLP_ENCRYPTED;
-
-			Assert(curr_page_hdr->xlp_magic == XLOG_PAGE_MAGIC || curr_page_hdr->xlp_magic == 0);
-			dec_off += XLogPageHeaderSize(curr_page_hdr);
-			data_size -= XLogPageHeaderSize(curr_page_hdr);
-			/* it's a beginning of the page */
-			iv_ctr = 0;
-		}
-		else
-		{
-			/* we're in the middle of the page */
-			iv_ctr = (offset % XLOG_BLCKSZ) - XLogPageHeaderSize(curr_page_hdr);
-		}
-
-		if ((data_size + dec_off) > readsz)
-		{
-			data_size = readsz - dec_off;
-		}
-
-		if (curr_page_hdr->xlp_info & XLP_ENCRYPTED)
-		{
-			SetXLogPageIVPrefix(curr_page_hdr->xlp_tli, curr_page_hdr->xlp_pageaddr, iv_prefix);
-			PG_TDE_DECRYPT_DATA(
-								iv_prefix, iv_ctr,
-								(char *) buf + dec_off, data_size, (char *) buf + dec_off, key);
-		}
-
-		page_size = XLOG_BLCKSZ;
-		dec_off += data_size;
+	if (curr_page_hdr->std.xlp_info & XLP_ENCRYPTED)
+	{
+		// Assert(curr_page_hdr->std.xlp_tli / curr_page_hdr->xlp_seg_size == segno);
+			
+		SetXLogPageIVPrefix(tli, segno, iv_prefix);
+		PG_TDE_DECRYPT_DATA(iv_prefix, offset + dec_off,
+					(char *) buf + dec_off, count, (char *) buf + dec_off, key);
 	}
 
 	return readsz;
 }
 
 /* IV: TLI(uint32) + XLogRecPtr(uint64)*/
-static void
+static inline void
 SetXLogPageIVPrefix(TimeLineID tli, XLogRecPtr lsn, char *iv_prefix)
 {
 	iv_prefix[0] = (tli >> 24);

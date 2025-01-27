@@ -56,6 +56,8 @@ TDEInitGlobalKeys(const char *dir)
 	{
 		init_default_keyring();
 		init_keys();
+
+		wal_need_seg_switch = true;
 	}
 	else
 #endif							/* !FRONTEND */
