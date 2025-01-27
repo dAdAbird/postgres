@@ -144,6 +144,7 @@ bool		XLOG_DEBUG = false;
 
 int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
 
+bool		wal_need_seg_switch = false;
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
  * to happen concurrently, but adds some CPU overhead to flushing the WAL,
@@ -2446,7 +2447,7 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 					INSTR_TIME_SET_ZERO(start);
 
 				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
-				written = xlog_smgr->seg_write(openLogFile, from, nleft, startoffset);
+				written = xlog_smgr->seg_write(openLogFile, from, nleft, startoffset, tli, openLogSegNo);
 				pgstat_report_wait_end();
 
 				/*
@@ -6147,6 +6148,9 @@ StartupXLOG(void)
 	 * commit timestamp.
 	 */
 	CompleteCommitTsInitialization();
+
+	if (wal_need_seg_switch)
+		RequestXLogSwitch(false);
 
 	/*
 	 * All done with end-of-recovery actions.

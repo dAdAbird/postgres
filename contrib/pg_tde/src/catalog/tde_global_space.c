@@ -55,6 +55,7 @@ TDEInitGlobalKeys(const char *dir)
 	 */
 	if (ikey != NULL)
 	{
+		// wal_need_seg_switch = true;
 		pg_tde_put_key_into_cache(XLOG_TDE_OID, ikey);
 	}
 
