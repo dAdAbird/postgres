@@ -122,6 +122,7 @@ TDEXLogWriteEncryptedPages(int fd, const void *buf, size_t count, off_t offset)
 	char iv_prefix[16] = {0,};
 	size_t data_size = 0;
 	XLogPageHeader curr_page_hdr = &EncryptCurrentPageHrd;
+	XLogPageHeader dec_page_hdr = &DecryptCurrentPageHrd;
 	XLogPageHeader enc_buf_page = NULL;
 	RelKeyData *key = GetTdeGlobaleRelationKey(GLOBAL_SPACE_RLOCATOR(XLOG_TDE_OID));
 	off_t enc_off;
@@ -147,6 +148,9 @@ TDEXLogWriteEncryptedPages(int fd, const void *buf, size_t count, off_t offset)
 
 		if (page_size == XLOG_BLCKSZ)
 		{
+			/* preserve the page header in case the next write begins from the
+			 * middle of the page
+			 */
 			memcpy((char *) curr_page_hdr, (char *) buf + enc_off, SizeOfXLogShortPHD);
 
 			/*
@@ -156,7 +160,18 @@ TDEXLogWriteEncryptedPages(int fd, const void *buf, size_t count, off_t offset)
 			 */
 			enc_buf_page = (XLogPageHeader) (TDEXLogEncryptBuf + enc_off);
 			memcpy((char *) enc_buf_page, (char *) buf + enc_off, (Size) XLogPageHeaderSize(curr_page_hdr));
-			enc_buf_page->xlp_info |= XLP_ENCRYPTED;
+
+			if (enc_buf_page->xlp_magic == XLOG_PAGE_MAGIC)
+			{
+				enc_buf_page->xlp_info |= XLP_ENCRYPTED;
+
+				/* walsender may read the beginning of the page directly from
+				 * the buffer and bypass tdeheap_xlog_seg_read. So we have to
+				 * preserve the header here for subsequent reads.
+				 */
+				memcpy((char *) dec_page_hdr, (char *) buf + enc_off, SizeOfXLogShortPHD);
+				dec_page_hdr->xlp_info |=  XLP_ENCRYPTED;
+			}
 
 			enc_off += XLogPageHeaderSize(curr_page_hdr);
 			data_size -= XLogPageHeaderSize(curr_page_hdr);
