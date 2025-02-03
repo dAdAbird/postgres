@@ -1,7 +1,0 @@
-{
-    "files.associations": {
-        "tde_principal_key.h": "c",
-        "tde_keyring.h": "c",
-        "tde_global_space.h": "c"
-    }
-}

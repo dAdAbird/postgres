@@ -16,10 +16,12 @@
 #include "storage/relfilelocator.h"
 
 /* Map entry flags */
-#define MAP_ENTRY_EMPTY         0x00
-#define TDE_KEY_TYPE_HEAP_BASIC 0x01
-#define TDE_KEY_TYPE_SMGR       0x02
-#define TDE_KEY_TYPE_GLOBAL     0x04
+#define MAP_ENTRY_EMPTY				0x00
+#define TDE_KEY_TYPE_HEAP_BASIC		0x01
+#define TDE_KEY_TYPE_SMGR			0x02
+#define TDE_KEY_TYPE_GLOBAL			0x04
+#define TDE_KEY_TYPE_WAL_DECRYPTED	0x08
+#define TDE_KEY_TYPE_WAL_ENCRYPTED	0x10
 #define MAP_ENTRY_VALID (TDE_KEY_TYPE_HEAP_BASIC | TDE_KEY_TYPE_SMGR | TDE_KEY_TYPE_GLOBAL)
 
 typedef struct InternalKey
@@ -30,6 +32,8 @@ typedef struct InternalKey
 	 */
 	uint8		key[INTERNAL_KEY_LEN];
 	uint32		rel_type;
+
+	XLogRecPtr start_lsn;
 
 	void	   *ctx;
 } InternalKey;
@@ -51,9 +55,8 @@ typedef struct XLogRelKey
 } XLogRelKey;
 
 extern RelKeyData *pg_tde_create_smgr_key(const RelFileLocator *newrlocator);
-extern RelKeyData *pg_tde_create_global_key(const RelFileLocator *newrlocator);
+extern RelKeyData *pg_tde_create_global_key(const RelFileLocator *newrlocator, XLogRecPtr start_lsn, uint32 flags);
 extern RelKeyData *pg_tde_create_heap_basic_key(const RelFileLocator *newrlocator);
-extern RelKeyData *pg_tde_create_key_map_entry(const RelFileLocator *newrlocator, uint32 entry_type);
 extern void pg_tde_write_key_map_entry(const RelFileLocator *rlocator, RelKeyData *enc_rel_key_data, TDEPrincipalKeyInfo *principal_key_info);
 extern void pg_tde_delete_key_map_entry(const RelFileLocator *rlocator, uint32 key_type);
 extern void pg_tde_free_key_map_entry(const RelFileLocator *rlocator, uint32 key_type, off_t offset);
@@ -77,6 +80,23 @@ extern void pg_tde_move_rel_key(const RelFileLocator *newrlocator, const RelFile
 
 #define PG_TDE_MAP_FILENAME			"pg_tde_%d_map"
 #define PG_TDE_KEYDATA_FILENAME		"pg_tde_%d_dat"
+
+typedef struct WALKeyCacheRec
+{
+	XLogRecPtr start_lsn;
+	XLogRecPtr end_lsn;
+
+	RelKeyData *key;
+
+	struct WALKeyCacheRec *next;
+} WALKeyCacheRec;
+
+extern RelKeyData *pg_tde_read_last_wal_key(void);
+
+extern WALKeyCacheRec *pg_tde_get_last_wal_key(void);
+extern WALKeyCacheRec *pg_tde_fetch_wal_keys(XLogRecPtr start_lsn);
+extern WALKeyCacheRec *pg_tde_get_wal_cache_keys(void);
+extern void pg_tde_wal_last_key_set_lsn(XLogRecPtr lsn, const char *keyfile_path);
 
 static inline void
 pg_tde_set_db_file_paths(Oid dbOid, char *map_path, char *keydata_path)

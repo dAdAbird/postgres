@@ -463,11 +463,6 @@ RETURNS boolean
 AS 'MODULE_PATHNAME', 'pg_tde_set_principal_key_server'
 LANGUAGE C;
 
-CREATE FUNCTION pg_tde_create_wal_key()
-RETURNS boolean
-AS 'MODULE_PATHNAME'
-LANGUAGE C;
-
 CREATE FUNCTION pg_tde_extension_initialize()
 RETURNS VOID
 AS 'MODULE_PATHNAME'
