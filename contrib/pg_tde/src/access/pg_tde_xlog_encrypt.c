@@ -121,7 +121,6 @@ TDEXLogWriteEncryptedPages(int fd, const void *buf, size_t count, off_t offset,
 							TimeLineID tli, XLogSegNo segno)
 {
 	char iv_prefix[16] = {0,};
-	XLogLongPageHeader dec_page_hdr = &DecryptCurrentPageHrd;
 	RelKeyData *key = GetTdeGlobaleRelationKey(GLOBAL_SPACE_RLOCATOR(XLOG_TDE_OID));
 	off_t enc_off = 0;
 
@@ -135,11 +134,6 @@ TDEXLogWriteEncryptedPages(int fd, const void *buf, size_t count, off_t offset,
 	{
 		memcpy(TDEXLogEncryptBuf, (char *) buf, SizeOfXLogLongPHD);
 		((XLogLongPageHeader) (TDEXLogEncryptBuf))->std.xlp_info |= XLP_ENCRYPTED;
-		
-		/* leave a hint to the walsender's reader in case it'll read the segment
-		 * start driectly from buffer (e.g. not via tdeheap_xlog_seg_read)
-		 */
-		memcpy((char *) dec_page_hdr, TDEXLogEncryptBuf, SizeOfXLogLongPHD);
 
 		enc_off = SizeOfXLogLongPHD;
 		count -= SizeOfXLogLongPHD;
