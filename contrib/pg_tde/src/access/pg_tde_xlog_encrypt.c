@@ -123,25 +123,28 @@ TDEXLogWriteEncryptedPages(int fd, const void *buf, size_t count, off_t offset,
 	char iv_prefix[16] = {0,};
 	RelKeyData *key = GetTdeGlobaleRelationKey(GLOBAL_SPACE_RLOCATOR(XLOG_TDE_OID));
 	off_t enc_off = 0;
+	size_t enc_size = count;
 
 #ifdef TDE_XLOG_DEBUG
 	elog(DEBUG1, "write encrypted WAL, pages amount: %ld, size: %lu, offset: %ld [%lX], seg: %X/%X", 
 					count / (Size) XLOG_BLCKSZ, count, offset, offset, LSN_FORMAT_ARGS(segno));
 #endif
 
-	/* segment's start, should mark it as encrypted  */
+	/* segment's start, should be marked as encrypted and but the header should
+	 * not be encrypted
+	 */
 	if (offset == 0)
 	{
 		memcpy(TDEXLogEncryptBuf, (char *) buf, SizeOfXLogLongPHD);
 		((XLogLongPageHeader) (TDEXLogEncryptBuf))->std.xlp_info |= XLP_ENCRYPTED;
 
 		enc_off = SizeOfXLogLongPHD;
-		count -= SizeOfXLogLongPHD;
+		enc_size -= SizeOfXLogLongPHD;
 	}
 
 	SetXLogPageIVPrefix(tli, segno, iv_prefix);
 	PG_TDE_ENCRYPT_DATA(iv_prefix, offset + enc_off,
-						(char *) buf + enc_off, count,
+						(char *) buf + enc_off, enc_size,
 						TDEXLogEncryptBuf + enc_off, key);
 
 	return pg_pwrite(fd, TDEXLogEncryptBuf, count, offset);
