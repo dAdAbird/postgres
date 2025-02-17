@@ -144,7 +144,6 @@ bool		XLOG_DEBUG = false;
 
 int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
 
-bool		wal_need_seg_switch = false;
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
  * to happen concurrently, but adds some CPU overhead to flushing the WAL,
@@ -6148,9 +6147,6 @@ StartupXLOG(void)
 	 * commit timestamp.
 	 */
 	CompleteCommitTsInitialization();
-
-	if (wal_need_seg_switch)
-		RequestXLogSwitch(false);
 
 	/*
 	 * All done with end-of-recovery actions.

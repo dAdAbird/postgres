@@ -16,12 +16,12 @@
 #include "storage/relfilelocator.h"
 
 /* Map entry flags */
-#define MAP_ENTRY_EMPTY				0x00
-#define TDE_KEY_TYPE_HEAP_BASIC		0x01
-#define TDE_KEY_TYPE_SMGR			0x02
-#define TDE_KEY_TYPE_GLOBAL			0x04
-#define TDE_KEY_TYPE_WAL_DECRYPTED	0x08
-#define TDE_KEY_TYPE_WAL_ENCRYPTED	0x10
+#define MAP_ENTRY_EMPTY					0x00
+#define TDE_KEY_TYPE_HEAP_BASIC			0x01
+#define TDE_KEY_TYPE_SMGR				0x02
+#define TDE_KEY_TYPE_GLOBAL				0x04
+#define TDE_KEY_TYPE_WAL_UNENCRYPTED	0x08
+#define TDE_KEY_TYPE_WAL_ENCRYPTED		0x10
 #define MAP_ENTRY_VALID (TDE_KEY_TYPE_HEAP_BASIC | TDE_KEY_TYPE_SMGR | TDE_KEY_TYPE_GLOBAL)
 
 typedef struct InternalKey

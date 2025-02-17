@@ -54,7 +54,7 @@ typedef struct EncryptionStateData {
 
 static EncryptionStateData *EncryptionState = NULL;
 
-/* TODO: can be swapped out to the disk*/
+/* TODO: can be swapped out to the disk */
 static RelKeyData *EncryptionKey = NULL;
 
 static int	XLOGChooseNumBuffers(void);
@@ -135,12 +135,11 @@ TDEXLogShmemInit(void)
 	 * EncryptXLog is on
 	 */
 	EncryptionState = (EncryptionStateData *)
-		TYPEALIGN(PG_IO_ALIGN_SIZE,
-					ShmemInitStruct("TDE XLog Encryption Buffer",
+							ShmemInitStruct("TDE XLog Encryption State",
 									TDEXLogEncryptStateSize(),
-									&foundBuf));
+									&foundBuf);
 
-	allocptr = ((char *) EncryptionState) + TYPEALIGN(PG_IO_ALIGN_SIZE, TDEXLogEncryptBuffSize());
+	allocptr = ((char *) EncryptionState) + TYPEALIGN(PG_IO_ALIGN_SIZE, sizeof(EncryptionStateData));
 	EncryptionState->segBuf = allocptr;
 
 	pg_atomic_init_u64(&EncryptionState->enc_key_lsn, 0);
@@ -228,13 +227,13 @@ TDEXLogSmgrInit(void)
 	/* TDOO: clean-up this mess */
 	if ((!key && EncryptXLog) || (key &&
 		((key->internal_key.rel_type & TDE_KEY_TYPE_WAL_ENCRYPTED && !EncryptXLog) || 
-		(key->internal_key.rel_type & TDE_KEY_TYPE_WAL_DECRYPTED && EncryptXLog))))
+		(key->internal_key.rel_type & TDE_KEY_TYPE_WAL_UNENCRYPTED && EncryptXLog))))
 	{
 		RelKeyData *new_key;
 
 		new_key = pg_tde_create_key_map_entry(
 								&GLOBAL_SPACE_RLOCATOR(XLOG_TDE_OID), 
-								TDE_KEY_TYPE_GLOBAL | (EncryptXLog ? TDE_KEY_TYPE_WAL_ENCRYPTED : TDE_KEY_TYPE_WAL_DECRYPTED),
+								TDE_KEY_TYPE_GLOBAL | (EncryptXLog ? TDE_KEY_TYPE_WAL_ENCRYPTED : TDE_KEY_TYPE_WAL_UNENCRYPTED),
 								InvalidXLogRecPtr);
 
 		if (!EncryptionKey) 
@@ -357,7 +356,7 @@ tdeheap_xlog_seg_read(int fd, void *buf, size_t count, off_t offset,
 		{
 			/* 
 			 * Check if the key's range overlaps with the buffer's and decypt
-			 * part that does.
+			 * the part that does.
 			 */
 			if (data_start <= curr_key->end_lsn && curr_key->start_lsn <= data_end)
 			{
@@ -370,6 +369,11 @@ tdeheap_xlog_seg_read(int fd, void *buf, size_t count, off_t offset,
 							(char *) buf + (offset - dec_off),
 							dec_sz, (char *) buf + (offset - dec_off),
 							curr_key->key);
+
+				if (dec_off + dec_sz == offset)
+				{
+					break;
+				}
 			}
 		}
 
