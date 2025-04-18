@@ -270,15 +270,32 @@ pg_tde_save_principal_key_redo(const TDESignedPrincipalKeyInfo *signed_key_info)
 	int			map_fd;
 	off_t		curr_pos;
 	char		db_map_path[MAXPGPATH] = {0};
+	int			keys_count;
 
 	pg_tde_set_db_file_path(signed_key_info->data.databaseId, db_map_path);
 
 	LWLockAcquire(tde_lwlock_enc_keys(), LW_EXCLUSIVE);
 
-	map_fd = pg_tde_open_file_write(db_map_path, signed_key_info, true, &curr_pos);
-	close(map_fd);
+	map_fd = pg_tde_open_file_write(db_map_path, signed_key_info, false, &curr_pos);
+	keys_count = lseek(map_fd, 0, SEEK_END) >= TDE_FILE_HEADER_SIZE / MAP_ENTRY_SIZE;
 
+	close(map_fd);
 	LWLockRelease(tde_lwlock_enc_keys());
+	
+	/* 
+	 * Rotate principal key if file exists and already has some internal keys.
+	 * May happen during the crash recovery.
+	*/
+	if (keys_count > 0)
+	{
+		XLogPrincipalKeyRotate rotate_rec;
+
+		rotate_rec.databaseId = signed_key_info->data.databaseId,
+		rotate_rec.keyringId = signed_key_info->data.keyringId,
+		memcpy(rotate_rec.keyName, signed_key_info->data.name, sizeof(signed_key_info->data.name)),
+
+		xl_tde_perform_rotate_key(&rotate_rec);
+	}
 }
 
 /*
