@@ -7,6 +7,11 @@
 #include "encryption/enc_aes.h"
 #include "storage/bufmgr.h"
 
+
+#ifdef FRONTEND
+#include "pg_tde_fe.h"
+#endif
+
 #define AES_BLOCK_SIZE 		        16
 #define NUM_AES_BLOCKS_IN_BATCH     200
 #define DATA_BYTES_PER_AES_BATCH    (NUM_AES_BLOCKS_IN_BATCH * AES_BLOCK_SIZE)
@@ -42,6 +47,7 @@ pg_tde_crypt_simple(const char *iv_prefix, uint32 start_offset, const char *data
 	const uint64 aes_end_block = (start_offset + data_len + (AES_BLOCK_SIZE - 1)) / AES_BLOCK_SIZE;
 	const uint64 aes_block_no = start_offset % AES_BLOCK_SIZE;
 	unsigned char enc_key[DATA_BYTES_PER_AES_BATCH + AES_BLOCK_SIZE];
+	bool		skip_rest = false;
 
 	Assert(aes_end_block - aes_start_block <= NUM_AES_BLOCKS_IN_BATCH + 1);
 
@@ -60,7 +66,21 @@ pg_tde_crypt_simple(const char *iv_prefix, uint32 start_offset, const char *data
 
 	for (uint32 i = 0; i < data_len; ++i)
 	{
-		out[i] = data[i] ^ enc_key[i + aes_block_no];
+
+		if (!skip_rest && (*((char *) data + i) == 0) &&
+			memcmp((char *) data + i, (char *) data + i + 1, data_len - i - 1) == 0)
+		{
+			skip_rest = true;
+		}
+
+		if (skip_rest)
+		{
+			out[i] = data[i];
+		}
+		else
+		{
+			out[i] = data[i] ^ enc_key[i + aes_block_no];
+		}
 	}
 }
 
@@ -79,6 +99,7 @@ pg_tde_crypt_complex(const char *iv_prefix, uint32 start_offset, const char *dat
 	const uint64 aes_block_no = start_offset % AES_BLOCK_SIZE;
 	uint32		batch_no = 0;
 	uint32		data_index = 0;
+	bool		skip_rest = false;
 
 	/* do max NUM_AES_BLOCKS_IN_BATCH blocks at a time */
 	for (uint64 batch_start_block = aes_start_block; batch_start_block < aes_end_block; batch_start_block += NUM_AES_BLOCKS_IN_BATCH)
@@ -106,6 +127,8 @@ pg_tde_crypt_complex(const char *iv_prefix, uint32 start_offset, const char *dat
 		if ((data_index + current_batch_bytes) > data_len)
 			current_batch_bytes = data_len - data_index;
 
+		// elog(WARNING, " ------ ----- SKIP0 ------ ----- soff: %u, di: %u, d_len: %u", start_offset, data_index, data_len);
+
 		for (uint32 i = 0; i < current_batch_bytes; ++i)
 		{
 			/*
@@ -125,7 +148,26 @@ pg_tde_crypt_complex(const char *iv_prefix, uint32 start_offset, const char *dat
 			 */
 			uint32		enc_key_index = i + (batch_no > 0 ? 0 : aes_block_no);
 
-			out[data_index] = data[data_index] ^ enc_key[enc_key_index];
+			// if ((start_offset + data_index) % XLOG_BLCKSZ == 0) // && (*((char *) data + data_index) == 0))
+			// if ((*((char *) data + data_index) == 0))
+			// {
+			// 	elog(WARNING, "SKIP0 off_didx: %u, didx: %u | b_end: %u | rest0: %d", (start_offset + data_index), data_index, data_len - data_index - 1,
+			// 			(memcmp((char *) data + data_index, (char *) data + data_index + 1, data_len - data_index - 1) == 0));
+
+			if ( !skip_rest && (*((char *) data + data_index) == 0) &&
+					memcmp((char *) data + data_index, (char *) data + data_index + 1, data_len - data_index - 1) == 0)
+			{
+				skip_rest = true;
+			}
+
+			if (skip_rest)
+			{
+				out[data_index] = data[data_index];
+			}
+			else
+			{
+				out[data_index] = data[data_index] ^ enc_key[enc_key_index];
+			}
 
 			data_index++;
 		}
