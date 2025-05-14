@@ -3423,8 +3423,6 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 	int			srcfd;
 	int			fd;
 	int			nbytes;
-	off_t		read_pos = 0;
- 	off_t		write_pos = 0;
 
 	/*
 	 * Open the source file
@@ -3473,8 +3471,7 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 			if (nread > sizeof(buffer))
 				nread = sizeof(buffer);
 			pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_READ);
-			r = xlog_smgr->seg_read(srcfd, buffer.data, nread, read_pos,
- 					srcTLI, srcsegno, wal_segment_size);
+			r = read(srcfd, buffer.data, nread);
 			if (r != nread)
 			{
 				if (r < 0)
@@ -3489,11 +3486,10 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 									path, r, (Size) nread)));
 			}
 			pgstat_report_wait_end();
-			read_pos += nread;
 		}
 		errno = 0;
 		pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_WRITE);
-		if ((int) xlog_smgr->seg_write(fd, buffer.data, sizeof(buffer), write_pos, destTLI, destsegno) != (int) sizeof(buffer))
+		if ((int) write(fd, buffer.data, sizeof(buffer)) != (int) sizeof(buffer))
 		{
 			int			save_errno = errno;
 
@@ -3509,7 +3505,6 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 					 errmsg("could not write to file \"%s\": %m", tmppath)));
 		}
 		pgstat_report_wait_end();
-		write_pos += sizeof(buffer);
 	}
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_SYNC);
